@@ -190,9 +190,10 @@ class Trainer:
         train_dataloader = DataLoader(dataset=train_dataset,
                                     batch_size=self.batch_size,
                                     shuffle=True)
+                                    
         val_dataloader = DataLoader(dataset=val_dataset,
                                     batch_size=self.batch_size,
-                                    shuffle=True)
+                                    shuffle=False) # <- do not shuffle
 
         return train_dataloader, val_dataloader
     
@@ -218,6 +219,10 @@ class Trainer:
         model_dir = os.path.join(dest_dir, "weights")
         self.create_dir(model_dir)
 
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(42)
+
         patience = 0 # --> local patience for early stopping
 
         for epoch in tqdm(range(self.epochs)):
@@ -229,10 +234,10 @@ class Trainer:
 
             if self.mixed_precision:
                 for idx, img_mask in enumerate(tqdm(train_dataloader)):
+                    img = img_mask[0].float().to(self.device)
+                    mask = img_mask[1].float().to(self.device)
+                    
                     with torch.amp.autocast(device_type=self.device): 
-                        img = img_mask[0].float().to(self.device)
-                        mask = img_mask[1].float().to(self.device)
-
                         pred = self.model(img)
                         loss = self.loss(pred, mask)
                         metric = dice_metric(pred, mask)
@@ -271,12 +276,12 @@ class Trainer:
                     train_running_dice_metric += metric.item()
                     
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     optimizer.step()
 
             end_time = time.time()
-            train_loss = train_running_loss / (idx + 1)
-            train_dice_metric = train_running_dice_metric / (idx + 1)
+            train_loss = train_running_loss / len(train_dataloader)
+            train_dice_metric = train_running_dice_metric / len(train_dataloader)
 
             self.model.eval()
             val_running_loss = 0
@@ -294,8 +299,8 @@ class Trainer:
                     val_running_loss += loss.item()
                     val_running_dice_metric += val_metric.item()
 
-                val_loss = val_running_loss / (idx + 1)
-                val_dice_metric = val_running_dice_metric / (idx + 1)
+                val_loss = val_running_loss / len(val_dataloader)
+                val_dice_metric = val_running_dice_metric / len(val_dataloader)
             
             # update the scheduler
             if self.load_and_train:
@@ -350,6 +355,19 @@ if __name__ == "__main__":
     trainer = Trainer(
                     model=unet,         
                     data_path="data/stacked_segmentation", 
-                    epochs=1,
-                            )
+                    model_path=None, 
+                    load_and_train=False,
+                    mixed_precision = True,
+                    
+                    epochs=50,
+                    image_size = 160,
+                    batch_size = 128,
+                    lr = 1e-3,
+
+                    early_stopping = True,
+                    early_stopping_start = 50,
+                    patience = 25, 
+                    device = "cuda"
+                    )
+                            
     trainer.train()
