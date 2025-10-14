@@ -1,11 +1,14 @@
 from modules.unet import UNet
 from dataset import CustomDataset
-from loss import dice_loss, dice_metric
 
 import os
 import time
 from typing import Tuple, List
 from itertools import cycle
+
+from monai.losses import DiceLoss
+from monai.metrics import DiceMetric
+from monai.transforms import AsDiscrete
 
 import torch
 from torch.amp import GradScaler
@@ -84,8 +87,18 @@ class Trainer:
         self.device = device
         self.data_path = data_path
         self.model_path = model_path
-                
-        self.loss = dice_loss
+  
+        self.loss = DiceLoss(
+            include_background = False, # might change this later
+            sigmoid=True, 
+            reduction="mean")
+
+        self.post_pred = AsDiscrete(threshold=0.5)
+        
+        self.metric = DiceMetric(
+            include_background = False, 
+            reduction="mean"
+        )
 
         self.image_size = image_size
         self.batch_size = batch_size
@@ -203,30 +216,34 @@ class Trainer:
         """
         train_dataloader, val_dataloader = self.create_dataloader(data_path=self.data_path)
 
+        # Model training config
         optimizer = optim.AdamW(self.model.parameters(), lr=self.lr)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs)
-
-        summary(self.model, input_size=(self.batch_size, 5, self.image_size, self.image_size))
-
         scaler = GradScaler(self.device) # --> mixed precision
 
-        # initialize variables for callbacks
+        # Show summary
+        summary(self.model, input_size=(self.batch_size, 5, self.image_size, self.image_size))
+
+        # Initialize variables for callbacks
         self.history = dict(train_loss=[], val_loss=[], train_dice_metric=[], val_dice_metric=[])
         best_val_loss = float("inf")
 
-        # create result directory
+        # Create result directory
         dest_dir = f"runs/{self.get_current_time()}" 
         model_dir = os.path.join(dest_dir, "weights")
         self.create_dir(model_dir)
 
+        # Add seed for reproducibility
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(42)
 
         patience = 0 # --> local patience for early stopping
 
+        self.metric.reset() # 1. Reset: Clears previous runs/epochs if resuming/starting
         for epoch in tqdm(range(self.epochs)):
             self.model.train()
+            self.metric.reset()
 
             start_time = time.time()
             train_running_loss = 0
@@ -236,13 +253,18 @@ class Trainer:
                 for idx, img_mask in enumerate(tqdm(train_dataloader)):
                     img = img_mask[0].float().to(self.device)
                     mask = img_mask[1].float().to(self.device)
-                    
-                    with torch.amp.autocast(device_type=self.device): 
-                        pred = self.model(img)
-                        loss = self.loss(pred, mask)
-                        metric = dice_metric(pred, mask)
 
                     optimizer.zero_grad()
+                    with torch.amp.autocast(device_type=self.device): 
+                        pred = self.model(img) # logits
+                        loss = self.loss(pred, mask)
+
+                    if torch.isnan(loss):
+                        print("NaN loss detected!")
+                        print("Pred min/max:", pred.min().item(), pred.max().item())
+                        print("Mask min/max:", mask.min().item(), mask.max().item())
+                        break
+
                     scaler.scale(loss).backward()
 
                     # Unscales the gradients of optimizer's assigned params in-place
@@ -259,53 +281,60 @@ class Trainer:
                     scaler.update()
 
                     train_running_loss += loss.item()
-                    train_running_dice_metric += metric.item()
+
+                    # Update metrics
+                    pred_sigmoid = torch.nn.functional.sigmoid(pred)
+                    pred_binary = self.post_pred(pred_sigmoid)
+                    self.metric(pred_binary, mask)
 
             else:
                 for idx, img_mask in enumerate(tqdm(train_dataloader)):
                     img = img_mask[0].float().to(self.device)
                     mask = img_mask[1].float().to(self.device)
 
-                    pred = self.model(img)
-                    
                     optimizer.zero_grad()
+                    pred = self.model(img) # logits
                     loss = self.loss(pred, mask)
-                    metric = dice_metric(pred, mask)
-                    
+
                     train_running_loss += loss.item()
-                    train_running_dice_metric += metric.item()
                     
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     optimizer.step()
 
+                    # Update metrics
+                    pred_sigmoid = torch.nn.functional.sigmoid(pred)
+                    pred_binary = self.post_pred(pred_simoid)
+                    self.metric(pred_binary, mask)
+                    
             end_time = time.time()
-            train_loss = train_running_loss / len(train_dataloader)
-            train_dice_metric = train_running_dice_metric / len(train_dataloader)
-
+            train_loss = train_running_loss / (idx + 1)# len(train_dataloader)
+            train_dice_metric = self.metric.aggregate().item()
+            self.metric.reset() # <- Reset again
+            
             self.model.eval()
             val_running_loss = 0
-            val_running_dice_metric = 0
 
             with torch.no_grad():
                 for idx, img_mask in enumerate(tqdm(val_dataloader)):
                     img = img_mask[0].float().to(self.device)
                     mask = img_mask[1].float().to(self.device)
 
-                    pred = self.model(img)
+                    pred = self.model(img) # logits
                     loss = self.loss(pred, mask)
-                    val_metric = dice_metric(pred, mask)
 
                     val_running_loss += loss.item()
-                    val_running_dice_metric += val_metric.item()
 
-                val_loss = val_running_loss / len(val_dataloader)
-                val_dice_metric = val_running_dice_metric / len(val_dataloader)
+                    pred_sigmoid = torch.nn.functional.sigmoid(pred)
+                    pred_binary = self.post_pred(pred_sigmoid) 
+                    self.metric(pred_binary, mask)
+
+                val_loss = val_running_loss / (idx + 1) # len(val_dataloader)
+                val_dice_metric = self.metric.aggregate().item()
+                self.metric.reset() # <- reset
             
             # update the scheduler
-            if self.load_and_train:
-                scheduler.step(val_loss)
-            else: scheduler.step()
+            scheduler.step()
 
             # update the history
             self.history["train_loss"].append(train_loss)
@@ -361,12 +390,12 @@ if __name__ == "__main__":
                     
                     epochs=50,
                     image_size = 160,
-                    batch_size = 128,
-                    lr = 1e-3,
+                    batch_size = 64,
+                    lr = 1e-4,
 
                     early_stopping = True,
-                    early_stopping_start = 50,
-                    patience = 25, 
+                    early_stopping_start = 10,
+                    patience = 10, 
                     device = "cuda"
                     )
                             
