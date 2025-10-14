@@ -1,7 +1,9 @@
 from custom_yolo_predictor.custom_detection_predictor import CustomDetectionPredictor
+
 import torch
 from torchvision.utils import save_image
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 import argparse
 import os
@@ -73,10 +75,10 @@ def generate_heatmaps():
                     canvas = add_gaussian_heatmap_to_canvas(canvas, box_conf, center_x, center_y, width, height) # <- box confidence will determine the strength of the signal
 
                 save_image(canvas, dest_dir)
-                # print(f"SAVING HEATMAP: Prediction in... {path}")
+                print(f"SAVING HEATMAP: Prediction in... {path}")
             else:       # <- if there are no predictions
                 save_image(canvas, dest_dir)
-                # print(f"SAVING EMPTY: No prediction in... {path}")
+                print(f"SAVING EMPTY: No prediction in... {path}")
                 
     """------END OF HELPER FUNCTIONS------"""
     image_dir           =  os.path.join(IN_DIR,  "images")
@@ -101,13 +103,35 @@ def generate_heatmaps():
 
         ### ----------------------------------------
         # Single Batch | Inference Per Images
-        for image_path in image_full_paths[:50]: 
-            results = predictor(image_path)
-            generate_heatmaps_from_bbox(results, heatmap_split)
+        # for image_path in image_full_paths[:50]: 
+        #     result = predictor(image_path)
+        #     generate_heatmaps_from_bbox(result, heatmap_split)
 
         ### ----------------------------------------
         # Multi Batch | Multiple Inference Per Batch (Multi-Images)
 
+        batches = [image_full_paths[i:i + BATCH_SIZE] for i in range(0, len(image_full_paths), BATCH_SIZE)]
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor: 
+            futures = []
+            for batch in batches: 
+                batch_results = predictor(batch)
+                for result in batch_results: 
+                    # Submit tasks and store the future
+                    future = executor.submit(generate_heatmaps_from_bbox, [result], heatmap_split)
+                    futures.append(future)
+            # Wait for all futures to complete before exiting the with block
+            for future in as_completed(futures): 
+                try: 
+                    future.result() # This will raise any exceptions that occurred in the thread
+                except Exception as e: 
+                    print(f"Error processing heatmap: {e}")
+        
+        # for batch in batches:
+        #     batch_results = predictor(batch)
+        #     with ThreadPoolExecutor(max_workers=WORKERS) as executor: 
+        #         for result in batch_results:
+        #             executor.submit(generate_heatmaps_from_bbox, result, heatmap_split)
 
         ### ----------------------------------------
 
