@@ -127,12 +127,6 @@ def generate_heatmaps():
                 except Exception as e: 
                     print(f"Error processing heatmap: {e}")
         
-        # for batch in batches:
-        #     batch_results = predictor(batch)
-        #     with ThreadPoolExecutor(max_workers=WORKERS) as executor: 
-        #         for result in batch_results:
-        #             executor.submit(generate_heatmaps_from_bbox, result, heatmap_split)
-
         ### ----------------------------------------
 
 if __name__ == "__main__": 
