@@ -85,7 +85,7 @@ def generate_heatmaps():
     heatmap_dest_dir    =  os.path.join(IN_DIR, "heatmap")
 
     # Declare args for custom YOLO
-    args = dict(save=False, verbose=False, device=DEVICE, imgsz=IMAGE_SIZE, batch=BATCH_SIZE)  
+    args = dict(save=False, verbose=False, device=DEVICE, imgsz=IMAGE_SIZE, batch=BATCH_SIZE, conf=0.5) # ADDED CONFIDENCE THRESHOLD HERE
     predictor = CustomDetectionPredictor(overrides=args)
     predictor.setup_model(YOLO_DIR)
 

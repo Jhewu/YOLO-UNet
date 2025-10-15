@@ -50,10 +50,6 @@ class CustomDataset(Dataset):
         if std > 0: heatmap_tensor = (heatmap_tensor - mean) / std
         else: heatmap_tensor = heatmap_tensor - mean # Avoid NaN if std = 0
 
-        # Optional: re-scale to [0, 1] again if needed
-        # This keeps intensity relative to overall heatmap contrast but normalized distribution
-        heatmap_tensor = (heatmap_tensor - heatmap_tensor.min()) / (heatmap_tensor.max() - heatmap_tensor.min() + 1e-8)
-
         # Stack img and heatmap along channel dimensions
         concat_tensor = torch.cat([img_tensor, heatmap_tensor], dim=0) # Shape (5, H, W)
         
