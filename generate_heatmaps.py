@@ -85,7 +85,7 @@ def generate_heatmaps():
     heatmap_dest_dir    =  os.path.join(IN_DIR, "heatmap")
 
     # Declare args for custom YOLO
-    args = dict(save=False, verbose=False, device=DEVICE, imgsz=IMAGE_SIZE, batch=BATCH_SIZE, conf=0.5) # ADDED CONFIDENCE THRESHOLD HERE
+    args = dict(save=False, verbose=False, device=DEVICE, imgsz=IMAGE_SIZE, batch=BATCH_SIZE, conf=CONFIDENCE) # ADDED CONFIDENCE THRESHOLD HERE
     predictor = CustomDetectionPredictor(overrides=args)
     predictor.setup_model(YOLO_DIR)
 
@@ -147,6 +147,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_dir',type=str,help='output directory of the generated heatmaps\t[heatmaps]')
     parser.add_argument("--device", type=str,help='cpu or cuda\t[cuda]')
     parser.add_argument('--image_size', type=int, help='image size NxN \t[160]')
+    parser.add_argument('--confidence', type=int, help='confidence thresholding, only higher conf predictions pass, if None, defaults to 0.25 (from YOLO docs) \t[0.25]')
     parser.add_argument('--batch_size', type=int, help='batch size for each YOLO inference step (speeds up processing significantly) \t[128]')
     parser.add_argument('--workers', type=int, help='number of threads/workers to use\t[10]')
     args = parser.parse_args()
@@ -157,6 +158,7 @@ if __name__ == "__main__":
     OUT_DIR = args.out_dir or "heatmaps"
     DEVICE = args.device or "cuda"
     IMAGE_SIZE = args.image_size or 160
+    CONFIDENCE = args.confidence or 0.25
     BATCH_SIZE = args.batch_size or 128
     WORKERS = args.workers or 10
 
